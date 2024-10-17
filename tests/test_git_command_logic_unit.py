@@ -46,7 +46,7 @@ async def testLS(tmp_path):
     impl = GitCommandLogicUnit(spec=spec)
     assert not Path(path, "main", spec.repo, ".git", "HEAD").exists()
 
-    contents = await impl.ls("main", "resources")
+    contents = await impl.ls("main", "eidolon_resources")
     assert "chatbot.yaml" in contents
 
 
