@@ -1,74 +1,38 @@
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  labels:
-    app: mongo
-  name: mongo
+  name: mongodb
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: mongo
-  strategy: { }
+      app: mongodb
   template:
     metadata:
       labels:
-        app: mongo
+        app: mongodb
     spec:
       containers:
-        - image: mongo
-          name: mongo
-          args: [ "--dbpath","/data/db" ]
-          livenessProbe:
-            exec:
-              command:
-                - mongosh
-                - --eval
-                - "db.adminCommand('ping')"
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-            successThreshold: 1
-            failureThreshold: 6
-          readinessProbe:
-            exec:
-              command:
-                - mongosh
-                - --eval
-                - "db.adminCommand('ping')"
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-            successThreshold: 1
-            failureThreshold: 6
+        - name: mongodb
+          image: mongo
+          ports:
+            - containerPort: 27017
           volumeMounts:
-            - name: "mongo-data-dir"
-              mountPath: "/data/db"
+            - name: mongodb-data
+              mountPath: /data/db
       volumes:
-        - name: "mongo-data-dir"
-          persistentVolumeClaim:
-            claimName: "mongo-data"
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: mongo-data
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
+        - name: mongodb-data
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: mongo
-  labels:
-    app: mongo
 spec:
-  ports:
-  - port: 27017          # Port exposed within the cluster
-    targetPort: 27017  # Port on the pods
   selector:
-    app: mongo
+    app: mongodb
+  ports:
+    - protocol: TCP
+      port: 27017
+      targetPort: 27017
