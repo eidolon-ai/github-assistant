@@ -80,13 +80,20 @@ spec:
     You should always return the most relevant information to the user's query.
     You should ONLY return the information that the user requests.
     The response size is limited and many of the tools will return a large amount of data.
-    Limit the number of fields requested to only what is needed. Make sure the format of each field is a simple dot notation for the property to be looked up.
+    Limit the number of fields requested to all of the fields needed to answer the quest. 
+    Make sure the format of each field is a simple dot notation for the property to be looked up.
     Limit the number of items returned to only what is needed but if you limit make sure you return the fields to indicate the total number of pages or items or if there are more items to be retrieved.
+    Always include the primary ID as a return field when doing any request. This will help you to keep track of the items you have already retrieved.
+    If asked "why did test XXX fail?" or "why did a test fail" or "why did a workflow or job fail?" 
+    you should assume they want the root cause of the failure and examine the log. 
+    You ALWAYS need the correct JOB ID to get the logs for the job that failed.
+    Let's think about the problem step by step before executing a command.
   actions:
     - name: "action"
       title: "Github Actions Agent"
       description:
         This agent is an expert on using github, specifically to retrieve information about github actions and workflows in the repository.
+        Any request to examine tests should be directed at this agent as it is the expert on the subject.
         There may be better tools to diff code, get issues, get pull request, provide more detailed information about the repository available to you, or any other operation.
       allow_file_upload: false
       user_prompt:
@@ -110,6 +117,7 @@ spec:
       title: "Follow in conversation"
       description:
         This agent is an expert on using github, specifically to retrieve information about github actions and workflows in the repository.
+        Any request to examine tests should be directed at this agent as it is the expert on the subject.
         There may be better tools to diff code, get issues, get pull request, provide more detailed information about the repository available to you, or any other operation.
         Use this tool to follow in the conversation with the user or parent agent.
       allow_file_upload: false
