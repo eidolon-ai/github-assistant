@@ -7,9 +7,9 @@ spec:
   apu:
     implementation: claude_apu
     logic_units:
-        - implementation: components.git_command_logic_unit.GitCommandLogicUnit
-          owner: "eidolon-ai"
-          repo: "eidolon"
+      - implementation: components.git_command_logic_unit.GitCommandLogicUnit
+        owner: "eidolon-ai"
+        repo: "eidolon"
 
   system_prompt:
     Your job is to provide information about the Eidolon git repository. You can checkout a branch and get the contents of a file.
@@ -17,10 +17,20 @@ spec:
     - name: "git"
       title: "Git Commandline Agent"
       description:
-        This agent is an expert on using git. It can provide information about the repository, checkout a branch, 
+        This agent is an expert on using git. It can provide information about the repository, checkout a branch,
         do various file operations. Use this agent to interact with the git repository or files in the repository.
         Think about what you are going to execute.  Make sure it is a safe command.
         When a command fails to execute it will return an error message. Use that error message to help you debug the command and how you tried to execute it.
         If the arguments are incorrect, the command will fail. Make sure you are providing the correct arguments.
       allow_file_upload: false
-
+      user_prompt:
+        You will be working with the branch {{ branch }}.
+        Answer the following question
+        {{ question }}
+      input_schema:
+        branch:
+          type: string
+          description: "The branch to checkout and run the commands against"
+        question:
+          type: string
+          description: "The question to ask the agent. Be specific and precise"
