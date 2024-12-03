@@ -1,18 +1,12 @@
-DOCKER_REPO_NAME := github-assistant-agent-server
+DOCKER_REPO_NAME ?= github-assistant-agent-server
 VERSION := $(shell grep -m 1 '^version = ' pyproject.toml | awk -F '"' '{print $$2}')
-REQUIRED_ENVS := OPENAI_API_KEY
+REQUIRED_ENVS := ANTHROPIC_API_KEY GITHUB_TOKEN
+WEBUI_TAG := 1.0.67
+NAMESPACE ?= default
 
-.PHONY: serve serve-dev check docker-serve _docker-serve .env sync update docker-build pull-webui k8s-operator check-kubectl check-helm check-cluster-running verify-k8s-permissions check-install-operator k8s-serve k8s-env test
+.PHONY: docker-serve _docker-serve .env sync update docker-build docker-push pull-webui k8s-operator check-kubectl check-helm check-cluster-running verify-k8s-permissions check-install-operator k8s-serve k8s-env k8s-mongo k8s-chroma test
 
 ARGS ?=
-
-serve-dev: .make/poetry_install .env
-	@echo "Starting Server..."
-	@poetry run eidolon-server -m local_dev resources --dotenv .env $(ARGS)
-
-serve: .make/poetry_install .env
-	@echo "Starting Server..."
-	@poetry run eidolon-server resources --dotenv .env $(ARGS)
 
 test: .make/poetry_install .env
 	@poetry run pytest tests $(ARGS)
@@ -59,24 +53,38 @@ check-docker-daemon:
 	@docker info >/dev/null 2>&1 || (echo "🚨 Error: Docker daemon is not running\n🛟 For help installing or running docker, visit https://docs.docker.com/get-docker/" >&2 && exit 1)
 
 docker-serve: .env check-docker-daemon poetry.lock Dockerfile docker-compose.yml
-	$(MAKE) -j2 _docker-serve ARGS=$(ARGS)
+	$(MAKE) -j4 _docker-serve ARGS=$(ARGS)
 
-_docker-serve: docker-build pull-webui
+_docker-serve: docker-build pull-webui pull-mongo pull-chroma
 	docker compose up $(ARGS)
 
-docker-compose.yml:
+docker-clean:
+	docker compose down -v
+
+
+docker-compose.yml: Makefile
 	@sed -e '/^  agent-server:/,/^  [^ ]/s/^    image: .*/    image: ${DOCKER_REPO_NAME}:latest/' docker-compose.yml > docker-compose.yml.tmp && mv docker-compose.yml.tmp docker-compose.yml
 	@echo "Updated docker-compose.yml with image ${DOCKER_REPO_NAME}:latest"
+	@sed -e 's|image: eidolonai/webui:.*|image: eidolonai/webui:$(WEBUI_TAG)|' docker-compose.yml > docker-compose.yml.tmp && mv docker-compose.yml.tmp docker-compose.yml
+	@echo "Updated docker-compose.yml with image eidolonai/webui:$(WEBUI_TAG)"
+	
+	
 
 update:
 	poetry add --lock eidolon-ai-sdk@latest
 	$(MAKE) Dockerfile
 
+	@new_version=$$(curl -s https://raw.githubusercontent.com/eidolon-ai/eidolon/refs/heads/main/webui/package.json | grep -o '"version": "[^"]*"' | cut -d'"' -f4); \
+	sed -e 's/^WEBUI_TAG := .*/WEBUI_TAG := '$$new_version'/' Makefile > Makefile.tmp && mv Makefile.tmp Makefile;
+	$(MAKE) docker-compose.yml
+	$(MAKE) k8s/webui.yaml
+
+
 sync:
 	@if git remote | grep -q upstream; then \
 		echo "upstream already exists"; \
 	else \
-		git remote add upstream https://github.com/eidolon-ai/agent-machine.git; \
+		git remote add upstream https://github.com/eidolon-ai/base-agent-machine.git; \
 		echo "upstream added"; \
 	fi
 	git pull upstream main --no-edit --no-commit
@@ -114,40 +122,89 @@ check-install-operator:
 		echo "Eidolon operator is already installed."; \
 	fi
 
+
 k8s-serve: k8s-server k8s-webui
 	@echo "Press Ctrl+C to exit"
 	@echo "------------------------------------------------------------------"
-	@echo "Server is running at $$(./k8s/get_service_url.sh eidolon-ext-service)"
-	@echo "WebUI is running at $$(./k8s/get_service_url.sh eidolon-webui-service)"
+	@echo "Server is running at $$(./k8s/get_service_url.sh eidolon-ext-service $(NAMESPACE))"
+	@echo "WebUI is running at $$(./k8s/get_service_url.sh eidolon-webui-service $(NAMESPACE))"
 	@echo "------------------------------------------------------------------"
 	kubectl logs -f \
 		-l 'app in (eidolon, eidolon-webui)' \
 		--all-containers=true \
-		--prefix=true
+		--prefix=true \
+		--namespace=$(NAMESPACE)
 
-k8s-server: check-cluster-running docker-build k8s-env
-	@kubectl apply -f k8s/ephemeral_machine.yaml
-	- @kubectl apply -f resources/
-	@kubectl apply -f k8s/eidolon-ext-service.yaml
+resources/machine.eidolon.yaml: Makefile
+	@sed -e 's|image: .*|image: ${DOCKER_REPO_NAME}:latest|' \
+		-e 's|imagePullPolicy: .*|imagePullPolicy: $(if $(DOCKER_REPO_URL),Always,Never)|' \
+		resources/machine.eidolon.yaml > resources/machine.eidolon.yaml.tmp && mv resources/machine.eidolon.yaml.tmp resources/machine.eidolon.yaml
+
+
+k8s-server: check-cluster-running docker-push k8s-env resources/machine.eidolon.yaml k8s-mongo k8s-chroma
+	@kubectl apply -f resources/ --namespace=$(NAMESPACE)
+	@kubectl apply -f k8s/eidolon-ext-service.yaml --namespace=$(NAMESPACE)
 	@echo "Waiting for eidolon-deployment to be ready..."
-	@kubectl rollout status deployment/eidolon-deployment --timeout=60s
+	@kubectl rollout status deployment/eidolon-deployment --timeout=60s --namespace=$(NAMESPACE)
 	@echo "Server Deployment is ready."
 
-k8s-webui:
-	@kubectl create configmap webui-apps-config --from-file=./webui.apps.json -o yaml --dry-run=client | kubectl apply -f -
-	@kubectl apply -f k8s/webui.yaml
+k8s-mongo:
+	@kubectl apply -f k8s/mongo.yaml --namespace=$(NAMESPACE)
+	@echo "Waiting for mongo to be ready..."
+	@kubectl wait --for=condition=ready pod -l app=mongodb --timeout=60s --namespace=$(NAMESPACE)
+	@echo "Mongo Deployment is ready."
+
+k8s-chroma:
+	@kubectl apply -f k8s/chroma.yaml --namespace=$(NAMESPACE)
+	@echo "Waiting for chroma to be ready..."
+	@kubectl wait --for=condition=ready pod -l app=chromadb --timeout=60s --namespace=$(NAMESPACE)
+	@kubectl rollout status deployment/chromadb --timeout=60s --namespace=$(NAMESPACE)
+	@echo "Chroma Deployment is ready."
+
+k8s/webui.yaml: Makefile
+	@sed -e 's|image: docker.io/eidolonai/webui:.*|image: docker.io/eidolonai/webui:$(WEBUI_TAG)|' k8s/webui.yaml > k8s/webui.yaml.tmp && mv k8s/webui.yaml.tmp k8s/webui.yaml
+
+
+k8s-webui: k8s/webui.yaml
+	@kubectl create configmap webui-apps-config --from-file=./webui.apps.json -o yaml --dry-run=client | kubectl apply -f - --namespace=$(NAMESPACE)
+	@kubectl apply -f k8s/webui.yaml --namespace=$(NAMESPACE)
 	@echo "Waiting for eidolon-webui to be ready..."
-	@kubectl rollout status deployment/eidolon-webui-deployment --timeout=60s
+	@kubectl rollout status deployment/eidolon-webui-deployment --timeout=60s --namespace=$(NAMESPACE)
 	@echo "WebUI Deployment is ready."
 
-k8s-env: .env
+# Add this target to create the namespace if it doesn't exist
+create-namespace:
+	@kubectl get namespace $(NAMESPACE) || kubectl create namespace $(NAMESPACE)
+
+# Update the k8s-env target to depend on create-namespace
+k8s-env: create-namespace .env
 	@if [ ! -f .env ]; then echo ".env file not found!"; exit 1; fi
-	@kubectl create secret generic eidolon --from-env-file=./.env --dry-run=client -o yaml | kubectl apply -f -
+	@kubectl create secret generic eidolon --from-env-file=./.env --dry-run=client -o yaml | kubectl apply -f - --namespace=$(NAMESPACE)
 
 docker-build: poetry.lock Dockerfile
 	@docker build -t $(DOCKER_REPO_NAME):latest .
 
+docker-push: docker-build
+	@if [ -n "$(DOCKER_REPO_URL)" ]; then \
+		docker push $(DOCKER_REPO_NAME):latest; \
+	fi
+
+
+# docker compose spends extra time extracting images into the daemon, which we can avoid by pulling them ourselves
 pull-webui:
 	@if ! docker image inspect eidolonai/webui:latest > /dev/null 2>&1; then \
 		docker pull eidolonai/webui:latest; \
 	fi
+
+pull-mongo:
+	@if ! docker image inspect mongo > /dev/null 2>&1; then \
+		docker pull mongo; \
+	fi
+
+pull-chroma:
+	@if ! docker image inspect chromadb/chroma > /dev/null 2>&1; then \
+		docker pull chromadb/chroma; \
+	fi
+
+k8s-clean:
+	@kubectl delete -f resources/ -f k8s/eidolon-ext-service.yaml -f k8s/webui.yaml -f k8s/mongo.yaml -f k8s/chroma.yaml -n $(NAMESPACE)
