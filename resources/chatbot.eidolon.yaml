@@ -11,7 +11,8 @@ spec:
   agent_refs:
     - git_agent
     - actions_agent
-    - issues_agent pull_request_agent
+    - issues_agent
+    - pull_request_agent
     - repo_metadata_agent
     - repo_code_search
     - repo_doc_search
