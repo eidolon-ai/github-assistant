@@ -1,4 +1,4 @@
-ARG EIDOLON_VERSION=0.1.180
+ARG EIDOLON_VERSION=0.1.181
 FROM docker.io/eidolonai/sdk_base:$EIDOLON_VERSION AS agent-machine-base-git
 
 RUN apt-get update && apt-get install -y git
